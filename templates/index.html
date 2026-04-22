@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Sender</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #25D366; margin-bottom: 20px; }
+        .upload-section { border: 2px dashed #ccc; padding: 40px; text-align: center; border-radius: 8px; margin-bottom: 20px; cursor: pointer; }
+        .upload-section:hover { border-color: #25D366; }
+        input[type="file"] { display: none; }
+        .btn { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #128C7E; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .info { margin: 20px 0; padding: 15px; background: #e8f5e9; border-radius: 8px; display: none; }
+        .info h3 { color: #2e7d32; margin-bottom: 10px; }
+        .preview { max-height: 400px; overflow-y: auto; margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f5f5f5; position: sticky; top: 0; }
+        .mensaje-section { margin: 20px 0; display: none; }
+        textarea { width: 100%; height: 100px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        .mensaje-section label { display: block; margin-bottom: 8px; font-weight: bold; }
+        .send-section { margin-top: 20px; display: none; }
+        .status-msg { margin-top: 10px; }
+        .error { color: #dc3545; }
+        .success { color: #28a745; }
+        .warning { color: #e65100; }
+        .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #f3f3f3; border-top: 3px solid #25D366; border-radius: 50%; animation: spin 1s linear infinite; margin-left: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WhatsApp Sender</h1>
+        
+        <div class="upload-section" id="uploadSection">
+            <label>
+                <input type="file" id="fileInput" accept=".xlsx">
+                <div style="font-size: 48px;">📁</div>
+                <p>Haz clic o arrastra un archivo Excel (.xlsx)</p>
+                <p style="font-size: 12px; color: #666;">Columnas: nombre, celular, placa</p>
+            </label>
+        </div>
+        
+        <div class="info" id="info">
+            <h3>Preview</h3>
+            <p>Total de clientes: <strong id="totalClientes">0</strong></p>
+        </div>
+        
+        <div class="mensaje-section" id="mensajeSection">
+            <label>Mensaje (usa {nombre}, {celular}, {placa}):</label>
+            <textarea id="mensaje">Hola {nombre}, tu placa es {placa}</textarea>
+        </div>
+        
+        <div class="send-section" id="sendSection">
+            <button class="btn" id="whatsappBtn" onclick="iniciarWhatsApp()">Iniciar WhatsApp Web</button>
+            <button class="btn" id="sendBtn" onclick="enviarMensajes()" disabled>Enviar Mensajes</button>
+            <div id="status"></div>
+        </div>
+    </div>
+
+    <script>
+        let clientes = [];
+        
+        async function iniciarWhatsApp() {
+            const btn = document.getElementById('whatsappBtn');
+            const sendBtn = document.getElementById('sendBtn');
+            const status = document.getElementById('status');
+            
+            btn.disabled = true;
+            btn.textContent = 'Abriendo WhatsApp Web...';
+            
+            try {
+                const response = await fetch('/iniciar-whatsapp', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.status) {
+                    status.innerHTML = '<p class="warning">WhatsApp Web abierto. <strong>Escanea el QR</strong>, luego haz clic en "Confirmar"</p>';
+                    btn.textContent = 'Ya escaneé el QR';
+                    btn.disabled = false;
+                    btn.onclick = function() {
+                        sendBtn.disabled = false;
+                        btn.textContent = 'Listo';
+                        btn.disabled = true;
+                        status.innerHTML = '<p class="success">WhatsApp conectado!</p>';
+                    };
+                }
+            } catch (error) {
+                status.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+                btn.disabled = false;
+                btn.textContent = 'Iniciar WhatsApp Web';
+            }
+        }
+        
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const response = await fetch('/upload', { method: 'POST', body: formData });
+            const result = await response.json();
+            
+            if (result.error) {
+                alert(result.error);
+                return;
+            }
+            
+            clientes = result.clientes;
+            document.getElementById('totalClientes').textContent = result.total;
+            
+            document.getElementById('info').innerHTML = `<h3>Preview - ${result.total} clientes</h3>`;
+            document.getElementById('info').style.display = 'block';
+            document.getElementById('mensajeSection').style.display = 'block';
+            document.getElementById('sendSection').style.display = 'block';
+            
+            renderPreview();
+        });
+        
+        function renderPreview(resultados) {
+            let html = '<div class="preview"><table><thead><tr><th>Nombre</th><th>Celular</th><th>Placa</th><th>Estado</th></tr></thead><tbody>';
+            const lista = resultados || clientes;
+            
+            lista.forEach(c => {
+                let icon, style;
+                if (c.status === 'enviado') { icon = '✓'; style = 'color: #28a745;'; }
+                else if (c.status === 'fallido') { icon = '✗'; style = 'color: #dc3545;'; }
+                else { icon = '⏳'; style = ''; }
+                html += `<tr><td>${c.nombre}</td><td>${c.celular}</td><td>${c.placa}</td><td style="${style}">${icon}</td></tr>`;
+            });
+            html += '</tbody></table></div>';
+            
+            let msgHtml = '';
+            if (resultados) {
+                const enviados = resultados.filter(r => r.status === 'enviado').length;
+                const fallidos = resultados.filter(r => r.status === 'fallido').length;
+                msgHtml = `<p class="success">Enviados: ${enviados}</p><p class="error">Fallidos: ${fallidos}</p>`;
+            }
+            
+            document.getElementById('info').innerHTML = `<h3>Preview - ${lista.length} clientes</h3>${msgHtml}${html}`;
+            document.getElementById('info').style.display = 'block';
+        }
+        
+        async function enviarMensajes() {
+            const mensaje = document.getElementById('mensaje').value;
+            const btn = document.getElementById('sendBtn');
+            const status = document.getElementById('status');
+            
+            btn.disabled = true;
+            btn.innerHTML = 'Enviando... <span class="spinner"></span>';
+            
+            try {
+                const response = await fetch('/enviar', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ clientes, mensaje })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    renderPreview(result.resultados);
+                    status.innerHTML = `<p class="success">${result.enviados} de ${result.total} mensajes enviados</p>`;
+                } else {
+                    status.innerHTML = `<p class="error">Error: ${result.error}</p>`;
+                }
+            } catch (error) {
+                status.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+            
+            btn.disabled = false;
+            btn.textContent = 'Enviar Mensajes';
+        }
+    </script>
+</body>
+</html>
