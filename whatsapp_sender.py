@@ -4,6 +4,7 @@ import urllib.parse
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -24,12 +25,17 @@ class WhatsAppSender:
 
     def wait_for_qr_disappear(self):
         try:
-            WebDriverWait(self.driver, 60).until(
-                EC.invisibility_of_element_located((By.CLASS_NAME, "_1OW Glenn"))
+            WebDriverWait(self.driver, 120).until(
+                EC.any_of(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "[data-testid='chat-list']")
+                    ),
+                    EC.presence_of_element_located((By.ID, "pane-side")),
+                )
             )
             print("Sesión iniciada!")
             return True
-        except:
+        except Exception:
             print("Tiempo agotado.")
             return False
 
@@ -38,14 +44,51 @@ class WhatsAppSender:
             phone = self._format_phone(phone)
             encoded_msg = urllib.parse.quote(message)
             self.driver.get(f"https://web.whatsapp.com/send?phone={phone}&text={encoded_msg}")
-            time.sleep(3)
+            time.sleep(2)
 
-            send_btn = WebDriverWait(self.driver, 30).until(
-                EC.element_to_be_clickable((By.XPATH, "//span[@data-icon='send']"))
+            WebDriverWait(self.driver, 45).until(
+                EC.presence_of_element_located((By.ID, "main"))
             )
-            send_btn.click()
-            time.sleep(1)
-            return True
+            time.sleep(1.5)
+
+            clicked = self.driver.execute_script(
+                """
+                const main = document.getElementById('main');
+                if (!main) return false;
+                const icons = ['send', 'wds-ic-send-filled', 'wds-ic-send'];
+                for (const name of icons) {
+                    const el = main.querySelector(`span[data-icon="${name}"], [data-icon="${name}"]`);
+                    if (!el) continue;
+                    const btn = el.closest('button') || el.closest('div[role="button"]');
+                    (btn || el).click();
+                    return true;
+                }
+                return false;
+                """
+            )
+            if clicked:
+                time.sleep(1.2)
+                return True
+
+            footer = self.driver.find_element(By.CSS_SELECTOR, "#main footer")
+            for box in reversed(
+                footer.find_elements(By.CSS_SELECTOR, "div[contenteditable='true']")
+            ):
+                try:
+                    if not box.is_displayed():
+                        continue
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({block: 'center'});", box
+                    )
+                    box.click()
+                    time.sleep(0.2)
+                    box.send_keys(Keys.ENTER)
+                    time.sleep(1.2)
+                    return True
+                except Exception:
+                    continue
+
+            return False
         except Exception as e:
             print(f"Error al enviar a {phone}: {e}")
             return False

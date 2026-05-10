@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -50,6 +51,116 @@ def format_phone(phone):
     elif not phone.startswith("57") and len(phone) == 9:
         phone = "5" + phone
     return phone
+
+
+def _try_click_send_js(driver):
+    return bool(
+        driver.execute_script(
+            """
+            const main = document.getElementById('main');
+            if (!main) return false;
+            const icons = ['send', 'wds-ic-send-filled', 'wds-ic-send'];
+            for (const name of icons) {
+                const el = main.querySelector(`span[data-icon="${name}"], [data-icon="${name}"]`);
+                if (!el) continue;
+                const btn = el.closest('button') || el.closest('div[role="button"]');
+                (btn || el).click();
+                return true;
+            }
+            return false;
+            """
+        )
+    )
+
+
+def _try_send_enter_footer(driver):
+    try:
+        footer = driver.find_element(By.CSS_SELECTOR, "#main footer")
+    except Exception:
+        return False
+    for box in reversed(footer.find_elements(By.CSS_SELECTOR, "div[contenteditable='true']")):
+        try:
+            if not box.is_displayed():
+                continue
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", box)
+            box.click()
+            time.sleep(0.15)
+            box.send_keys(Keys.ENTER)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _try_send_xpaths(driver, wait_s=2):
+    main_xpaths = [
+        "//div[@id='main']//button[contains(@aria-label, 'Send') or contains(@aria-label, 'Enviar')]",
+        "//div[@id='main']//span[@data-icon='send']/ancestor::button[1]",
+        "//div[@id='main']//span[contains(@data-icon, 'send')]/ancestor::*[@role='button'][1]",
+    ]
+    for xpath in main_xpaths:
+        try:
+            btn = WebDriverWait(driver, wait_s).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+            btn.click()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _click_send_with_pyautogui_if_configured():
+    """
+    Misma idea que tu script con pyautogui + send_btn.png: clic por imagen en pantalla.
+    Usa send_btn.png en la carpeta del proyecto o la ruta en WA_SEND_BTN_IMAGE.
+    Requiere: pip install pyautogui opencv-python (ver requirements-pywhatkit.txt).
+    """
+    path = (os.environ.get("WA_SEND_BTN_IMAGE") or "").strip()
+    if not path:
+        path = "send_btn.png" if os.path.isfile("send_btn.png") else ""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        import pyautogui
+    except ImportError:
+        return False
+    try:
+        boton = pyautogui.locateCenterOnScreen(path, confidence=0.8)
+    except Exception:
+        return False
+    if not boton:
+        return False
+    pyautogui.click(boton)
+    time.sleep(1.2)
+    return True
+
+
+def _enviar_desde_composer_o_boton(driver):
+    """
+    WhatsApp Web cambia el DOM con frecuencia. Estrategia:
+    1) Clic en botón enviar solo dentro de #main.
+    2) Compositor del pie + Enter (texto ya viene en la URL).
+    3) Reintentos en bucle (como locateCenterOnScreen en tu snippet).
+    4) Opcional: pyautogui + send_btn.png si instalaste dependencias y hay captura del botón.
+    """
+    WebDriverWait(driver, 45).until(EC.presence_of_element_located((By.ID, "main")))
+    time.sleep(1.0)
+
+    for intento in range(12):
+        if intento:
+            time.sleep(0.5)
+        if _try_click_send_js(driver):
+            time.sleep(1.0)
+            return True
+        if _try_send_enter_footer(driver):
+            time.sleep(1.0)
+            return True
+        if _try_send_xpaths(driver, wait_s=2):
+            time.sleep(1.0)
+            return True
+
+    return _click_send_with_pyautogui_if_configured()
 
 
 def get_chrome_driver():
@@ -108,7 +219,7 @@ def enviar():
 
     try:
         driver.current_url
-    except:
+    except Exception:
         driver = get_chrome_driver()
         driver.get("https://web.whatsapp.com")
         return jsonify({"success": False, "error": "WhatsApp reiniciado. Escanea QR nuevamente."}), 400
@@ -124,29 +235,15 @@ def enviar():
 
         encoded_msg = urllib.parse.quote(mensaje)
         driver.get(f"https://web.whatsapp.com/send?phone={phone}&text={encoded_msg}")
-        time.sleep(4)
+        time.sleep(2)
 
-        send_btn = None
-        for xpath in [
-            "//span[@data-icon='send']",
-            "//button[@data-tab='10']",
-            "//span[contains(@data-icon, 'send')]",
-            "//div[@role='button' and contains(@aria-label, 'Enviar')]",
-            "//button[contains(@aria-label, 'send')]",
-        ]:
-            try:
-                send_btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, xpath))
-                )
-                if send_btn:
-                    break
-            except:
-                continue
+        try:
+            ok = _enviar_desde_composer_o_boton(driver)
+        except Exception as e:
+            print(f"Error al enviar a {phone}: {e}")
+            ok = False
 
-        status = "enviado" if send_btn else "fallido"
-        if send_btn:
-            send_btn.click()
-            time.sleep(1.5)
+        status = "enviado" if ok else "fallido"
 
         resultados.append({"nombre": nombre, "celular": celular, "placa": placa, "status": status})
 
